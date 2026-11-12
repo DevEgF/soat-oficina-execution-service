@@ -41,6 +41,11 @@ class RabbitExecutionEventPublisher(
         )
     }
 
+    override fun publishFailed(execution: Execution) {
+        val reason = requireNotNull(execution.failureReason) { "Execution has not failed" }
+        publish(MessageType.ExecutionFailed, execution, ExecutionFailedPayload(execution.workOrderId, reason))
+    }
+
     private fun publish(type: MessageType, execution: Execution, payload: Any) {
         val messageId = UUID.randomUUID().toString()
         val correlationId = execution.correlationId ?: messageId

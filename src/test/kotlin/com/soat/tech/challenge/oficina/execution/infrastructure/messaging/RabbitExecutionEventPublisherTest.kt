@@ -58,6 +58,22 @@ class RabbitExecutionEventPublisherTest {
     }
 
     @Test
+    fun `failed is published with the reason and stored correlation id`() {
+        val execution = Fixtures.queued(correlationId = "corr-9").apply { fail("engine seized", Fixtures.NOW) }
+        val message = slot<Message>()
+
+        publisher.publishFailed(execution)
+
+        verify { rabbit.send("oficina", "event.execution.failed", capture(message)) }
+        val envelope = codec.decode(message.captured.body)
+        assertEquals("ExecutionFailed", message.captured.messageProperties.type)
+        assertEquals("corr-9", envelope.correlationId)
+        assertEquals("wo-1", envelope.sagaId)
+        assertEquals("wo-1", envelope.payload["workOrderId"].asText())
+        assertEquals("engine seized", envelope.payload["reason"].asText())
+    }
+
+    @Test
     fun `missing correlation id falls back to the message id`() {
         val execution = Fixtures.queued(correlationId = null).apply { startDiagnosis(Fixtures.NOW) }
         val message = slot<Message>()
@@ -72,5 +88,6 @@ class RabbitExecutionEventPublisherTest {
     fun `refuses to publish events the status does not allow`() {
         assertThrows<IllegalArgumentException> { publisher.publishStatusChanged(Fixtures.queued()) }
         assertThrows<IllegalArgumentException> { publisher.publishFinished(Fixtures.queued()) }
+        assertThrows<IllegalArgumentException> { publisher.publishFailed(Fixtures.queued()) }
     }
 }

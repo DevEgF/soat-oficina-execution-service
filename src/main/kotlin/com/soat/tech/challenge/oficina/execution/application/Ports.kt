@@ -24,4 +24,5 @@ interface ProcessedMessageStore {
 interface ExecutionEventPublisher {
     fun publishStatusChanged(execution: Execution)
     fun publishFinished(execution: Execution)
+    fun publishFailed(execution: Execution)
 }

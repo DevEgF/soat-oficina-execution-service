@@ -40,6 +40,8 @@ data class ExecutionDocument(
     val diagnosisStartedAt: Instant? = null,
     val repairStartedAt: Instant? = null,
     val finishedAt: Instant? = null,
+    val failedAt: Instant? = null,
+    val failureReason: String? = null,
     val events: List<EventDocument> = emptyList(),
 )
 
@@ -66,6 +68,8 @@ fun Execution.toDocument() = ExecutionDocument(
     diagnosisStartedAt = diagnosisStartedAt,
     repairStartedAt = repairStartedAt,
     finishedAt = finishedAt,
+    failedAt = failedAt,
+    failureReason = failureReason,
     events = events.map { EventDocument(it.type, it.status, it.occurredAt) },
 )
 
@@ -82,6 +86,8 @@ fun ExecutionDocument.toDomain() = Execution(
     diagnosisStartedAt = diagnosisStartedAt,
     repairStartedAt = repairStartedAt,
     finishedAt = finishedAt,
+    failedAt = failedAt,
+    failureReason = failureReason,
     events = events.map { ExecutionEvent(it.type, it.status, it.occurredAt) },
     version = version,
 )

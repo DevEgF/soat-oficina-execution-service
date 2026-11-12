@@ -32,7 +32,7 @@ class ExecutionCommandHandler(
         when (type) {
             MessageType.StartExecution -> startExecution(envelope)
             else -> {
-                // Contract types this service does not handle (commands of other services, day-13 messages).
+                // Contract types this service does not handle (commands of other services and events this service publishes).
                 log.warn("message.unhandled type={} sagaId={} messageId={}", envelope.type, envelope.sagaId, envelope.messageId)
                 return
             }
