@@ -97,10 +97,13 @@ class ExecutionServiceIntegrationTest {
     private fun body(response: HttpResponse<String>): JsonNode = json.readTree(response.body())
 
     companion object {
+        // MongoDB 8.0 refuses to start on Linux kernels 6.19 to 7.0.13 (SERVER-121912), which is
+        // what the GitHub-hosted runners ship. Leaving rseq to glibc keeps TCMalloc off it.
         @Container
         @ServiceConnection
         @JvmStatic
-        val mongo = MongoDBContainer("mongo:8.0.34")
+        val mongo: MongoDBContainer = MongoDBContainer("mongo:8.0.34")
+            .withEnv("GLIBC_TUNABLES", "glibc.pthread.rseq=1")
 
         @Container
         @ServiceConnection

@@ -65,6 +65,10 @@ spec:
                   key: MONGODB_PASSWORD
             - name: MONGO_INITDB_DATABASE
               value: execution
+            # O MongoDB 8.0 não inicia em kernels Linux de 6.19 a 7.0.13 (SERVER-121912). Com o
+            # rseq registrado pela glibc, o TCMalloc não o usa e o banco sobe em qualquer kernel.
+            - name: GLIBC_TUNABLES
+              value: glibc.pthread.rseq=1
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
