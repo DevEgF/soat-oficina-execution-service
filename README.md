@@ -3,10 +3,10 @@
 Serviço de **Execução** da oficina mecânica (fila de execução, diagnósticos e reparos) —
 Tech Challenge SOAT, Fase 4. É um dos três microsserviços que substituem o monólito
 `soat-oficina-app`; os outros são `soat-oficina-os-service` e `soat-oficina-billing-service`.
-É o serviço que usa o banco **NoSQL** da plataforma (MongoDB). Neste estágio é só o
-esqueleto (health, JWT, erros, correlação, OpenAPI) mais o caminho feliz da saga: fila de
-execução, diagnóstico, reparo e finalização, participando da saga orquestrada pelo OS Service
-via RabbitMQ.
+É o serviço que usa o banco **NoSQL** da plataforma (MongoDB). Além do
+esqueleto (health, JWT, erros, correlação, OpenAPI), cuida da fila de execução, do diagnóstico,
+do reparo, da finalização e da falha, participando da saga orquestrada pelo OS Service via
+RabbitMQ.
 
 ## Stack
 
@@ -49,10 +49,13 @@ Todas em `/api/**`, com `Authorization: Bearer <jwt>`; aparecem no OpenAPI (`/sw
 | `POST /api/executions/{workOrderId}/diagnosis/start` | `QUEUED` -> `IN_DIAGNOSIS` |
 | `POST /api/executions/{workOrderId}/repair/start` | `IN_DIAGNOSIS` -> `IN_EXECUTION` |
 | `POST /api/executions/{workOrderId}/finish` | `IN_EXECUTION` -> `FINISHED` |
+| `POST /api/executions/{workOrderId}/fail` | `QUEUED`, `IN_DIAGNOSIS` ou `IN_EXECUTION` -> `FAILED`; corpo `{ "reason": "texto" }` |
 
-Os `POST` não têm corpo e respondem 200 com o mesmo formato do `GET`; 404 para OS desconhecida
-e 409 para transição inválida (ou atualização concorrente). Status: `QUEUED`, `IN_DIAGNOSIS`,
-`IN_EXECUTION`, `FINISHED` e `FAILED` (reservado para a compensação).
+Os `POST` respondem 200 com o mesmo formato do `GET` (que traz também `failedAt` e
+`failureReason`); 404 para OS desconhecida e 409 para transição inválida (ou atualização
+concorrente). Só o `fail` tem corpo, e `reason` é obrigatório e não pode ser vazio (400 caso
+contrário); a falha não é possível a partir de `FINISHED` nem de `FAILED` (409). Status: `QUEUED`,
+`IN_DIAGNOSIS`, `IN_EXECUTION`, `FINISHED` e `FAILED`.
 
 Persistência no MongoDB: coleção `execucoes` (um documento por OS, `_id` e `workOrderId` com a
 OS, índice único em `workOrderId`, lista `events`, controle de versão otimista) e
@@ -71,6 +74,7 @@ com a DLQ `<fila>.dlq` (`x-dead-letter-exchange=oficina.dlx`, `x-dead-letter-rou
 | consome | `StartExecution` | `command.execution.start-execution` | cria a execução `QUEUED`; repetição (mesmo `messageId` ou mesma OS) não duplica |
 | publica | `ExecutionStatusChanged` | `event.execution.status-changed` | `status` = `IN_DIAGNOSIS` ou `IN_EXECUTION` |
 | publica | `ExecutionFinished` | `event.execution.finished` | `finishedAt` |
+| publica | `ExecutionFailed` | `event.execution.failed` | `reason`; publicado por `POST .../fail` |
 
 Envelope JSON (`messageId`, `sagaId` = id da OS, `type`, `occurredAt`, `correlationId`,
 `payload`) serializado com o `ObjectMapper`, sem `__TypeId__`. O `correlationId` recebido é
@@ -78,7 +82,7 @@ guardado na execução e reutilizado nos eventos publicados, inclusive os dispar
 consumidor ele vai para o MDC (chave `requestId`). O listener faz 3 tentativas (500 ms de
 intervalo inicial, dobrando) e, esgotadas, rejeita sem requeue (DLQ). JSON inválido, campos
 obrigatórios ausentes e `type` fora do contrato vão direto para a DLQ, sem retry. Tipos do
-contrato que este serviço ainda não trata geram log WARN e ack. O evento é publicado
+contrato que não são deste serviço geram log WARN e ack. O evento é publicado
 depois de gravar o documento; se a publicação falhar, a chamada HTTP responde 500 com o estado
 já gravado (um outbox fica como evolução).
 

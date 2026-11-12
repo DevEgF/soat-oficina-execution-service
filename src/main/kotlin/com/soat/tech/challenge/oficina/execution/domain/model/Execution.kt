@@ -12,7 +12,8 @@ data class ExecutionEvent(val type: String, val status: ExecutionStatus, val occ
 
 /**
  * Execution of one work order. The state machine is explicit:
- * QUEUED -> IN_DIAGNOSIS -> IN_EXECUTION -> FINISHED. Each action validates the origin status.
+ * QUEUED -> IN_DIAGNOSIS -> IN_EXECUTION -> FINISHED, and any non-final status -> FAILED.
+ * Each action validates the origin status.
  */
 class Execution(
     val workOrderId: String,
@@ -28,6 +29,8 @@ class Execution(
     diagnosisStartedAt: Instant? = null,
     repairStartedAt: Instant? = null,
     finishedAt: Instant? = null,
+    failedAt: Instant? = null,
+    failureReason: String? = null,
     events: List<ExecutionEvent> = emptyList(),
     /** Optimistic-lock version of the stored document (null until first saved). */
     val version: Long? = null,
@@ -39,6 +42,11 @@ class Execution(
     var repairStartedAt: Instant? = repairStartedAt
         private set
     var finishedAt: Instant? = finishedAt
+        private set
+
+    var failedAt: Instant? = failedAt
+        private set
+    var failureReason: String? = failureReason
         private set
 
     private val eventLog: MutableList<ExecutionEvent> = events.toMutableList()
@@ -65,6 +73,14 @@ class Execution(
         record("ExecutionFinished", now)
     }
 
+    fun fail(reason: String, now: Instant) {
+        if (status !in FAILABLE) throw InvalidStatusTransitionException(status.name, "fail")
+        status = ExecutionStatus.FAILED
+        failedAt = now
+        failureReason = reason
+        record("ExecutionFailed", now)
+    }
+
     private fun requireStatus(expected: ExecutionStatus, action: String) {
         if (status != expected) throw InvalidStatusTransitionException(status.name, action)
     }
@@ -74,6 +90,8 @@ class Execution(
     }
 
     companion object {
+        private val FAILABLE = setOf(ExecutionStatus.QUEUED, ExecutionStatus.IN_DIAGNOSIS, ExecutionStatus.IN_EXECUTION)
+
         fun queue(
             workOrderId: String,
             trackingCode: String,
