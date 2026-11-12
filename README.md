@@ -4,8 +4,9 @@ Serviço de **Execução** da oficina mecânica (fila de execução, diagnóstic
 Tech Challenge SOAT, Fase 4. É um dos três microsserviços que substituem o monólito
 `soat-oficina-app`; os outros são `soat-oficina-os-service` e `soat-oficina-billing-service`.
 É o serviço que usa o banco **NoSQL** da plataforma (MongoDB). Neste estágio é só o
-esqueleto: health, validação de JWT, tratamento de erros, correlação de requisições e
-OpenAPI. O domínio chega nas próximas entregas.
+esqueleto (health, JWT, erros, correlação, OpenAPI) mais o caminho feliz da saga: fila de
+execução, diagnóstico, reparo e finalização, participando da saga orquestrada pelo OS Service
+via RabbitMQ.
 
 ## Stack
 
@@ -36,6 +37,50 @@ variáveis de ambiente continuam valendo por cima. A API sobe em `http://localho
 O token é HS256 assinado com SHA-256 do `APP_JWT_SECRET`, com `iss=oficina`,
 `aud=oficina-api` e `env` igual ao `APP_ENVIRONMENT`. Rotas fora de `/api/**` e das públicas
 são negadas.
+
+## API
+
+Todas em `/api/**`, com `Authorization: Bearer <jwt>`; aparecem no OpenAPI (`/swagger-ui.html`).
+
+| Rota | O que faz |
+|---|---|
+| `GET /api/executions?status=QUEUED` | lista por ordem de entrada na fila (mais antiga primeiro); sem `status`, lista todas |
+| `GET /api/executions/{workOrderId}` | consulta a execução, com datas e a lista `events` |
+| `POST /api/executions/{workOrderId}/diagnosis/start` | `QUEUED` -> `IN_DIAGNOSIS` |
+| `POST /api/executions/{workOrderId}/repair/start` | `IN_DIAGNOSIS` -> `IN_EXECUTION` |
+| `POST /api/executions/{workOrderId}/finish` | `IN_EXECUTION` -> `FINISHED` |
+
+Os `POST` não têm corpo e respondem 200 com o mesmo formato do `GET`; 404 para OS desconhecida
+e 409 para transição inválida (ou atualização concorrente). Status: `QUEUED`, `IN_DIAGNOSIS`,
+`IN_EXECUTION`, `FINISHED` e `FAILED` (reservado para a compensação).
+
+Persistência no MongoDB: coleção `execucoes` (um documento por OS, `_id` e `workOrderId` com a
+OS, índice único em `workOrderId`, lista `events`, controle de versão otimista) e
+`processed_messages` (`_id` = `messageId`). Os índices são criados na subida. O MongoDB do
+cluster é standalone, sem transação multidocumento: o efeito de cada mensagem é idempotente por
+si (índice único) e o `messageId` é gravado depois dele.
+
+## Mensagens
+
+Exchange `oficina` (topic) e `oficina.dlx` (direct), declarados na subida junto com as filas
+`execution.commands` (binding `command.execution.#`) e `os.events` (binding `event.#`), cada uma
+com a DLQ `<fila>.dlq` (`x-dead-letter-exchange=oficina.dlx`, `x-dead-letter-routing-key=<fila>.dlq`).
+
+| Direção | `type` | Routing key | Efeito |
+|---|---|---|---|
+| consome | `StartExecution` | `command.execution.start-execution` | cria a execução `QUEUED`; repetição (mesmo `messageId` ou mesma OS) não duplica |
+| publica | `ExecutionStatusChanged` | `event.execution.status-changed` | `status` = `IN_DIAGNOSIS` ou `IN_EXECUTION` |
+| publica | `ExecutionFinished` | `event.execution.finished` | `finishedAt` |
+
+Envelope JSON (`messageId`, `sagaId` = id da OS, `type`, `occurredAt`, `correlationId`,
+`payload`) serializado com o `ObjectMapper`, sem `__TypeId__`. O `correlationId` recebido é
+guardado na execução e reutilizado nos eventos publicados, inclusive os disparados por HTTP; no
+consumidor ele vai para o MDC (chave `requestId`). O listener faz 3 tentativas (500 ms de
+intervalo inicial, dobrando) e, esgotadas, rejeita sem requeue (DLQ). JSON inválido, campos
+obrigatórios ausentes e `type` fora do contrato vão direto para a DLQ, sem retry. Tipos do
+contrato que este serviço ainda não trata geram log WARN e ack. O evento é publicado
+depois de gravar o documento; se a publicação falhar, a chamada HTTP responde 500 com o estado
+já gravado (um outbox fica como evolução).
 
 ## Testes
 
@@ -98,6 +143,8 @@ No Spring Boot 4 as propriedades de conexão do MongoDB são `spring.mongodb.*`
 | `SPRING_RABBITMQ_PASSWORD` | Secret | `oficina` |
 | `NEW_RELIC_APP_NAME` e demais `NEW_RELIC_*` | ConfigMap (`oficina-execution-service`) | — |
 | `NEW_RELIC_LICENSE_KEY` | Secret (vazio desliga o agente) | — |
+
+Não há variável nova nesta entrega: o RabbitMQ e o MongoDB usam as mesmas já listadas acima.
 
 O grupo de readiness do Actuator inclui `mongo` e `rabbit`: o pod só recebe tráfego com o
 banco e o broker acessíveis.
