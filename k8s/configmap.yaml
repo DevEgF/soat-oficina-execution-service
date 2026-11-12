@@ -1,0 +1,29 @@
+# Configuração não sensível. Os segredos vêm do Secret execution-service-secrets (ver secret.example.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: execution-service-config
+  labels:
+    app.kubernetes.io/name: execution-service
+data:
+  SERVER_PORT: "8080"
+  APP_ENVIRONMENT: "hml"
+  SPRING_MONGODB_HOST: "execution-mongo"
+  SPRING_MONGODB_PORT: "27017"
+  SPRING_MONGODB_DATABASE: "execution"
+  SPRING_MONGODB_USERNAME: "execution"
+  SPRING_MONGODB_AUTHENTICATION_DATABASE: "admin"
+  SPRING_RABBITMQ_HOST: "rabbitmq"
+  SPRING_RABBITMQ_PORT: "5672"
+  SPRING_RABBITMQ_USERNAME: "oficina"
+  LOGGING_STRUCTURED_FORMAT_CONSOLE: "logstash"
+  # Agente Java do New Relic: só liga se NEW_RELIC_LICENSE_KEY (Secret) não estiver vazio.
+  NEW_RELIC_APP_NAME: "oficina-execution-service"
+  NEW_RELIC_LOG_FILE_NAME: "STDOUT"
+  NEW_RELIC_DISTRIBUTED_TRACING_ENABLED: "true"
+  NEW_RELIC_APPLICATION_LOGGING_ENABLED: "true"
+  NEW_RELIC_APPLICATION_LOGGING_FORWARDING_ENABLED: "true"
+  NEW_RELIC_APPLICATION_LOGGING_LOCAL_DECORATING_ENABLED: "false"
+  NEW_RELIC_ATTRIBUTES_EXCLUDE: "request.parameters.*,request.headers.*,response.headers.*,cpf,authorization,password"
+  NEW_RELIC_TRANSACTION_TRACER_RECORD_SQL: "off"
+  NEW_RELIC_LABELS: "environment:hml;service:execution-service"
