@@ -1,8 +1,8 @@
 # soat-oficina-execution-service
 
 [![CI](https://github.com/DevEgF/soat-oficina-execution-service/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/DevEgF/soat-oficina-execution-service/actions/workflows/ci.yml)
-[![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=coverage&branch=develop)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service&branch=develop)
-[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=alert_status&branch=develop)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service&branch=develop)
+[![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service)
+[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service)
 
 ## O que é
 
@@ -180,13 +180,15 @@ apague o PVC `data-execution-mongo-0` (perde os dados) ou altere o usuário pelo
 
 - **CI:** o job `ci / build` roda `./gradlew check` e, quando o secret `SONAR_TOKEN` existe, a
   análise do Sonar com `-Dsonar.qualitygate.wait=true`; o job `ci / image` faz o build da imagem,
-  sem push. O CI roda em PRs e em pushes na `main` e na `develop`.
+  sem push. O CI roda em PRs e em pushes na `main` e na `develop`; o plano gratuito do SonarQube
+  Cloud não analisa outras branches, então o Sonar roda só em PRs e na `main`. O badge do CI mostra
+  a `develop`; os do Sonar, a `main`.
 - **Gate de cobertura:** `./gradlew check` executa os testes unitários e o de integração (contexto
   completo contra MongoDB e RabbitMQ reais, via Testcontainers; precisa do Docker), gera o JaCoCo em
   `build/reports/jacoco/test/` (XML e HTML) e falha se a cobertura de linhas do serviço inteiro
   ficar abaixo de 80%. Só a classe principal fica fora da conta (a mesma exclusão vai para o Sonar).
 - **Sonar:** projeto `DevEgF_soat-oficina-execution-service` (organização `devegf-soat-oficina`),
-  [resumo do novo código](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service&branch=develop).
+  [resumo do novo código](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service).
   A análise é feita pelo CI (`./gradlew sonar`); a análise automática do SonarQube Cloud não se
   aplica, porque o projeto não está vinculado ao GitHub.
 - **Verificação de dependências:** `gradle/verification-metadata.xml` guarda o SHA-256 de cada
