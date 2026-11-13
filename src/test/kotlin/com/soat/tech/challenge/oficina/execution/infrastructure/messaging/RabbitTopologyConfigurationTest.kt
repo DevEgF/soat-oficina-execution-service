@@ -45,7 +45,7 @@ class RabbitTopologyConfigurationTest {
     }
 
     @Test
-    fun `bindings follow the spec`() {
+    fun `bindings follow the messaging contract`() {
         val actual = bindings.map { Triple(it.exchange, it.destination, it.routingKey) }.toSet()
         assertEquals(
             setOf(
