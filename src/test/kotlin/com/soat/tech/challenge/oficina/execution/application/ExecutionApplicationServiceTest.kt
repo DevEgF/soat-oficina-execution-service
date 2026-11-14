@@ -81,6 +81,29 @@ class ExecutionApplicationServiceTest {
     }
 
     @Test
+    fun `fail saves then publishes the failure`() {
+        val execution = Fixtures.queued()
+        every { repository.findByWorkOrderId("wo-1") } returns execution
+        every { repository.save(execution) } returns execution
+
+        val result = service.fail("wo-1", "no parts")
+
+        assertEquals(ExecutionStatus.FAILED, result.status)
+        assertEquals("no parts", result.failureReason)
+        verify(exactly = 1) { publisher.publishFailed(execution) }
+    }
+
+    @Test
+    fun `fail from a final status neither saves nor publishes`() {
+        every { repository.findByWorkOrderId("wo-1") } returns Fixtures.queued().apply { fail("x", Fixtures.NOW) }
+
+        assertThrows<InvalidStatusTransitionException> { service.fail("wo-1", "again") }
+
+        verify(exactly = 0) { repository.save(any()) }
+        verify(exactly = 0) { publisher.publishFailed(any()) }
+    }
+
+    @Test
     fun `invalid transition neither saves nor publishes`() {
         every { repository.findByWorkOrderId("wo-1") } returns Fixtures.queued()
 
@@ -96,6 +119,7 @@ class ExecutionApplicationServiceTest {
 
         assertThrows<NotFoundException> { service.get("x") }
         assertThrows<NotFoundException> { service.startDiagnosis("x") }
+        assertThrows<NotFoundException> { service.fail("x", "reason") }
     }
 
     @Test

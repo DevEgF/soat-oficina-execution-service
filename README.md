@@ -1,22 +1,34 @@
 # soat-oficina-execution-service
 
-Serviço de **Execução** da oficina mecânica (fila de execução, diagnósticos e reparos) —
-Tech Challenge SOAT, Fase 4. É um dos três microsserviços que substituem o monólito
-`soat-oficina-app`; os outros são `soat-oficina-os-service` e `soat-oficina-billing-service`.
-É o serviço que usa o banco **NoSQL** da plataforma (MongoDB). Neste estágio é só o
-esqueleto (health, JWT, erros, correlação, OpenAPI) mais o caminho feliz da saga: fila de
-execução, diagnóstico, reparo e finalização, participando da saga orquestrada pelo OS Service
-via RabbitMQ.
+[![CI](https://github.com/DevEgF/soat-oficina-execution-service/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/DevEgF/soat-oficina-execution-service/actions/workflows/ci.yml)
+[![Cobertura](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=coverage)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service)
+[![Quality gate](https://sonarcloud.io/api/project_badges/measure?project=DevEgF_soat-oficina-execution-service&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service)
 
-## Stack
+## O que é
 
-- Kotlin 2.4.10, Spring Boot 4.1.1, Java 17, Gradle 9.4.0 (wrapper)
-- Spring Web, Security (OAuth2 Resource Server, JWT HS256), Actuator, springdoc 3.1.0
-- MongoDB 8 (Spring Data MongoDB) e RabbitMQ (Spring AMQP)
-- Testes: JUnit 5, MockK, Testcontainers (MongoDB e RabbitMQ), JaCoCo (mínimo de 80% de linhas)
-- Observabilidade: agente Java do New Relic na imagem, logs estruturados (logstash) no cluster
+Serviço de **Execução** da oficina mecânica (Tech Challenge SOAT, Fase 4): dono da fila de
+execução, do diagnóstico, do reparo, da finalização e da falha de cada ordem de serviço (OS).
+É um dos três microsserviços que substituem o monólito `soat-oficina-app`; os outros são
+`soat-oficina-os-service` e `soat-oficina-billing-service`. É o serviço que usa o banco
+**NoSQL** da plataforma (MongoDB).
 
-## Rodar local
+Na saga orquestrada pelo OS Service, o Execution é participante: recebe o comando
+`StartExecution` depois do pagamento aprovado, coloca a OS na fila e, conforme a equipe avança
+a execução pela API, publica `ExecutionStatusChanged`, `ExecutionFinished` ou `ExecutionFailed`.
+
+Stack: Kotlin 2.4.10, Spring Boot 4.1.2, Java 17, Gradle 9.4.0 (wrapper), Spring Web, Security
+(OAuth2 Resource Server, JWT HS256), Actuator, springdoc 3.1.0, MongoDB 8 e RabbitMQ.
+
+## Arquitetura
+
+Camadas `presentation` (controllers REST), `application` (casos de uso e portas),
+`domain` (agregado `Execution` com a máquina de estados) e `infrastructure` (MongoDB, RabbitMQ,
+segurança, observabilidade). Diagramas de componentes, da participação na saga e do modelo de
+dados em [docs/arquitetura.md](docs/arquitetura.md).
+
+## Como rodar
+
+### Fora do cluster (perfil `local`)
 
 Pré-requisitos: JDK 17, Docker. As dependências (MongoDB na porta 27017, usuário root
 `execution` no banco `admin`, e RabbitMQ na 5672) vêm do `docker-compose.yml` da plataforma,
@@ -38,62 +50,7 @@ O token é HS256 assinado com SHA-256 do `APP_JWT_SECRET`, com `iss=oficina`,
 `aud=oficina-api` e `env` igual ao `APP_ENVIRONMENT`. Rotas fora de `/api/**` e das públicas
 são negadas.
 
-## API
-
-Todas em `/api/**`, com `Authorization: Bearer <jwt>`; aparecem no OpenAPI (`/swagger-ui.html`).
-
-| Rota | O que faz |
-|---|---|
-| `GET /api/executions?status=QUEUED` | lista por ordem de entrada na fila (mais antiga primeiro); sem `status`, lista todas |
-| `GET /api/executions/{workOrderId}` | consulta a execução, com datas e a lista `events` |
-| `POST /api/executions/{workOrderId}/diagnosis/start` | `QUEUED` -> `IN_DIAGNOSIS` |
-| `POST /api/executions/{workOrderId}/repair/start` | `IN_DIAGNOSIS` -> `IN_EXECUTION` |
-| `POST /api/executions/{workOrderId}/finish` | `IN_EXECUTION` -> `FINISHED` |
-
-Os `POST` não têm corpo e respondem 200 com o mesmo formato do `GET`; 404 para OS desconhecida
-e 409 para transição inválida (ou atualização concorrente). Status: `QUEUED`, `IN_DIAGNOSIS`,
-`IN_EXECUTION`, `FINISHED` e `FAILED` (reservado para a compensação).
-
-Persistência no MongoDB: coleção `execucoes` (um documento por OS, `_id` e `workOrderId` com a
-OS, índice único em `workOrderId`, lista `events`, controle de versão otimista) e
-`processed_messages` (`_id` = `messageId`). Os índices são criados na subida. O MongoDB do
-cluster é standalone, sem transação multidocumento: o efeito de cada mensagem é idempotente por
-si (índice único) e o `messageId` é gravado depois dele.
-
-## Mensagens
-
-Exchange `oficina` (topic) e `oficina.dlx` (direct), declarados na subida junto com as filas
-`execution.commands` (binding `command.execution.#`) e `os.events` (binding `event.#`), cada uma
-com a DLQ `<fila>.dlq` (`x-dead-letter-exchange=oficina.dlx`, `x-dead-letter-routing-key=<fila>.dlq`).
-
-| Direção | `type` | Routing key | Efeito |
-|---|---|---|---|
-| consome | `StartExecution` | `command.execution.start-execution` | cria a execução `QUEUED`; repetição (mesmo `messageId` ou mesma OS) não duplica |
-| publica | `ExecutionStatusChanged` | `event.execution.status-changed` | `status` = `IN_DIAGNOSIS` ou `IN_EXECUTION` |
-| publica | `ExecutionFinished` | `event.execution.finished` | `finishedAt` |
-
-Envelope JSON (`messageId`, `sagaId` = id da OS, `type`, `occurredAt`, `correlationId`,
-`payload`) serializado com o `ObjectMapper`, sem `__TypeId__`. O `correlationId` recebido é
-guardado na execução e reutilizado nos eventos publicados, inclusive os disparados por HTTP; no
-consumidor ele vai para o MDC (chave `requestId`). O listener faz 3 tentativas (500 ms de
-intervalo inicial, dobrando) e, esgotadas, rejeita sem requeue (DLQ). JSON inválido, campos
-obrigatórios ausentes e `type` fora do contrato vão direto para a DLQ, sem retry. Tipos do
-contrato que este serviço ainda não trata geram log WARN e ack. O evento é publicado
-depois de gravar o documento; se a publicação falhar, a chamada HTTP responde 500 com o estado
-já gravado (um outbox fica como evolução).
-
-## Testes
-
-```bash
-./gradlew check
-```
-
-Roda os testes unitários e o de integração (contexto completo contra MongoDB e RabbitMQ
-reais, via Testcontainers; precisa do Docker), gera o JaCoCo em
-`build/reports/jacoco/test/` (XML e HTML) e falha se a cobertura de linhas do serviço inteiro
-ficar abaixo de 80%. Só a classe principal fica fora da conta (a mesma exclusão vai para o Sonar).
-
-## Deploy no kind
+### No kind
 
 O cluster `oficina` (contexto `kind-oficina`), o namespace `oficina`, o RabbitMQ e o Secret
 `execution-service-secrets` vêm de `soat-oficina-infra-k8s/local/` (`up.sh` e `secrets.sh`).
@@ -118,11 +75,70 @@ Subcomandos de `scripts/deploy-kind.sh`:
 | `diagnose` | pods, eventos, describe e logs |
 | `all` | build, load, apply, wait e smoke; se falhar, rollback e diagnóstico |
 
-Variáveis: `IMAGE_TAG` (padrão: SHA curto do git ou `local`), `KIND_CLUSTER=oficina`,
+Variáveis: `IMAGE_TAG` (padrão: SHA curto do git ou `local`; defina outra tag se o commit não
+mudou, senão o cluster mantém a imagem anterior), `KIND_CLUSTER=oficina`,
 `KUBE_CONTEXT=kind-oficina`, `NAMESPACE=oficina`, `ROLLOUT_TIMEOUT=300s`.
 
 No GitHub, o workflow `Deploy` roda o mesmo script no runner self-hosted (`oficina-kind`)
 depois de um `CI` verde de push na `main`.
+
+## API
+
+Todas em `/api/**`, com `Authorization: Bearer <jwt>`; aparecem no OpenAPI (`/swagger-ui.html`).
+
+| Rota | O que faz |
+|---|---|
+| `GET /api/executions?status=QUEUED` | lista por ordem de entrada na fila (mais antiga primeiro); sem `status`, lista todas |
+| `GET /api/executions/{workOrderId}` | consulta a execução, com datas e a lista `events` |
+| `POST /api/executions/{workOrderId}/diagnosis/start` | `QUEUED` -> `IN_DIAGNOSIS` |
+| `POST /api/executions/{workOrderId}/repair/start` | `IN_DIAGNOSIS` -> `IN_EXECUTION` |
+| `POST /api/executions/{workOrderId}/finish` | `IN_EXECUTION` -> `FINISHED` |
+| `POST /api/executions/{workOrderId}/fail` | `QUEUED`, `IN_DIAGNOSIS` ou `IN_EXECUTION` -> `FAILED`; corpo `{ "reason": "texto" }` |
+
+Os `POST` respondem 200 com o mesmo formato do `GET` (que traz também `failedAt` e
+`failureReason`); 404 para OS desconhecida e 409 para transição inválida (ou atualização
+concorrente). Só o `fail` tem corpo, e `reason` é obrigatório e não pode ser vazio (400 caso
+contrário); a falha não é possível a partir de `FINISHED` nem de `FAILED` (409). Status: `QUEUED`,
+`IN_DIAGNOSIS`, `IN_EXECUTION`, `FINISHED` e `FAILED`.
+
+Swagger UI em `/swagger-ui.html` e OpenAPI em `/v3/api-docs`. Coleção Postman da plataforma:
+[soat-oficina-infra-k8s/postman](https://github.com/DevEgF/soat-oficina-infra-k8s/tree/develop/postman).
+
+## Banco
+
+MongoDB, banco `execution`.
+
+| Coleção | O que guarda |
+|---|---|
+| `execucoes` | um documento por OS (`_id` e `workOrderId` iguais ao id da OS): dados do veículo e do cliente, serviços e peças, status, datas de cada etapa, motivo da falha, `correlationId` da saga, lista `events` e versão para bloqueio otimista |
+| `processed_messages` | `_id` = `messageId` das mensagens já tratadas (idempotência), com `type` e `processedAt` |
+
+Os índices são criados na subida: único em `workOrderId` e composto em `status` + `queuedAt`. O MongoDB do
+cluster é standalone, sem transação multidocumento: o efeito de cada mensagem é idempotente por
+si (índice único) e o `messageId` é gravado depois dele.
+
+## Mensagens
+
+Exchange `oficina` (topic) e `oficina.dlx` (direct), declarados na subida junto com as filas
+`execution.commands` (binding `command.execution.#`) e `os.events` (binding `event.#`), cada uma
+com a DLQ `<fila>.dlq` (`x-dead-letter-exchange=oficina.dlx`, `x-dead-letter-routing-key=<fila>.dlq`).
+
+| Direção | `type` | Routing key | Efeito |
+|---|---|---|---|
+| consome | `StartExecution` | `command.execution.start-execution` | cria a execução `QUEUED`; repetição (mesmo `messageId` ou mesma OS) não duplica |
+| publica | `ExecutionStatusChanged` | `event.execution.status-changed` | `status` = `IN_DIAGNOSIS` ou `IN_EXECUTION` |
+| publica | `ExecutionFinished` | `event.execution.finished` | `finishedAt` |
+| publica | `ExecutionFailed` | `event.execution.failed` | `reason`; publicado por `POST .../fail` |
+
+Envelope JSON (`messageId`, `sagaId` = id da OS, `type`, `occurredAt`, `correlationId`,
+`payload`) serializado com o `ObjectMapper`, sem `__TypeId__`. O `correlationId` recebido é
+guardado na execução e reutilizado nos eventos publicados, inclusive os disparados por HTTP; no
+consumidor ele vai para o MDC (chave `requestId`). O listener faz 3 tentativas (500 ms de
+intervalo inicial, dobrando) e, esgotadas, rejeita sem requeue (DLQ). JSON inválido, campos
+obrigatórios ausentes e `type` fora do contrato vão direto para a DLQ, sem retry. Tipos do
+contrato que não são deste serviço geram log WARN e ack. O evento é publicado
+depois de gravar o documento; se a publicação falhar, a chamada HTTP responde 500 com o estado
+já gravado (um outbox fica como evolução).
 
 ## Configuração
 
@@ -144,8 +160,6 @@ No Spring Boot 4 as propriedades de conexão do MongoDB são `spring.mongodb.*`
 | `NEW_RELIC_APP_NAME` e demais `NEW_RELIC_*` | ConfigMap (`oficina-execution-service`) | — |
 | `NEW_RELIC_LICENSE_KEY` | Secret (vazio desliga o agente) | — |
 
-Não há variável nova nesta entrega: o RabbitMQ e o MongoDB usam as mesmas já listadas acima.
-
 O grupo de readiness do Actuator inclui `mongo` e `rabbit`: o pod só recebe tráfego com o
 banco e o broker acessíveis.
 
@@ -164,9 +178,55 @@ apague o PVC `data-execution-mongo-0` (perde os dados) ou altere o usuário pelo
 
 ## Qualidade
 
-O job `ci / build` roda `./gradlew check` e, quando o secret `SONAR_TOKEN` existe, a análise
-no SonarCloud (`DevEgF_soat-oficina-execution-service`, organização `devegf-soat-oficina`) com
-`-Dsonar.qualitygate.wait=true`. O job `ci / image` faz o build da imagem, sem push.
+- **CI:** o job `ci / build` roda `./gradlew check` e, quando o secret `SONAR_TOKEN` existe, a
+  análise do Sonar com `-Dsonar.qualitygate.wait=true`; o job `ci / image` faz o build da imagem,
+  sem push. O CI roda em PRs e em pushes na `main` e na `develop`; o plano gratuito do SonarQube
+  Cloud não analisa outras branches, então o Sonar roda só em PRs e na `main`. O badge do CI mostra
+  a `develop`; os do Sonar, a `main`.
+- **Gate de cobertura:** `./gradlew check` executa os testes unitários e o de integração (contexto
+  completo contra MongoDB e RabbitMQ reais, via Testcontainers; precisa do Docker), gera o JaCoCo em
+  `build/reports/jacoco/test/` (XML e HTML) e falha se a cobertura de linhas do serviço inteiro
+  ficar abaixo de 80%. Só a classe principal fica fora da conta (a mesma exclusão vai para o Sonar).
+- **Sonar:** projeto `DevEgF_soat-oficina-execution-service` (organização `devegf-soat-oficina`),
+  [resumo do novo código](https://sonarcloud.io/summary/new_code?id=DevEgF_soat-oficina-execution-service).
+  A análise é feita pelo CI (`./gradlew sonar`); a análise automática do SonarQube Cloud não se
+  aplica, porque o projeto não está vinculado ao GitHub.
+- **Verificação de dependências:** `gradle/verification-metadata.xml` guarda o SHA-256 de cada
+  plugin e dependência; o Gradle recusa artefato com checksum diferente. Ao mudar uma versão ou
+  acrescentar uma dependência, regenere o arquivo e confira o diff:
+
+  ```bash
+  ./gradlew --no-daemon --write-verification-metadata sha256 --refresh-dependencies check bootJar sonarResolver
+  ./gradlew --no-daemon --refresh-dependencies check bootJar sonarResolver   # sem escrever: tem de passar
+  docker build -t soat-oficina-execution-service:verif .                      # o build da imagem também resolve dependências
+  ```
+
+## Observabilidade
+
+- **New Relic:** aplicação `oficina-execution-service` (`NEW_RELIC_APP_NAME`). O agente Java
+  (9.4.0) vai na imagem e só liga com `NEW_RELIC_LICENSE_KEY` preenchida; a dependência
+  `newrelic-api` (mesma versão) é no-op sem o agente.
+- **Trace distribuído pelo RabbitMQ:** o agente coloca `traceparent`, `tracestate` e `newrelic`
+  nos cabeçalhos das mensagens publicadas durante uma requisição HTTP. O processamento de uma
+  mensagem consumida não é uma transação do agente por padrão, então o
+  `ExecutionCommandListener` abre uma (`@Trace(dispatcher = true)`), aceita os cabeçalhos de
+  trace da mensagem pelo adaptador `NewRelicTracing`, nomeia a transação (`Message`,
+  `<fila>/<type>`) e registra os atributos `sagaId`, `messageType`, `messageId` e
+  `correlationId`. O que for publicado dentro dela continua o mesmo trace.
+- **Logs:** estruturados (logstash) no cluster e encaminhados pelo agente com o contexto do MDC
+  (`NEW_RELIC_APPLICATION_LOGGING_FORWARDING_CONTEXT_DATA_ENABLED`). Durante uma mensagem o MDC
+  tem `sagaId`, `messageType`, `messageId` e `requestId` (o `correlationId` da saga); nas
+  requisições HTTP, `requestId`, `environment` e `service`.
+
+## Saga
+
+Este serviço é participante da saga de OS orquestrada pelo OS Service: executa `StartExecution`
+(coloca a OS na fila de execução, de forma idempotente) e informa o andamento com
+`ExecutionStatusChanged`, `ExecutionFinished` e `ExecutionFailed`. Quando uma execução falha, o
+`ExecutionFailed` é o gatilho para o orquestrador compensar (estornar o pagamento, cancelar o
+orçamento e cancelar a OS); o Execution não desfaz nada por conta própria. Detalhes, tabelas de passos e de
+compensações em
+[soat-oficina-os-service](https://github.com/DevEgF/soat-oficina-os-service/tree/develop#saga).
 
 ## Proteção da `main`
 

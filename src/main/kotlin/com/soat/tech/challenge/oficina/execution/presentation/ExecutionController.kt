@@ -8,6 +8,7 @@ import io.swagger.v3.oas.annotations.tags.Tag
 import org.springframework.web.bind.annotation.GetMapping
 import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
+import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
@@ -16,6 +17,8 @@ import java.time.Instant
 data class VehicleResponse(val plate: String, val brand: String, val model: String, val year: Int)
 
 data class ItemResponse(val code: String, val quantity: Int)
+
+data class FailExecutionRequest(val reason: String? = null)
 
 data class ExecutionEventResponse(val type: String, val status: ExecutionStatus, val occurredAt: Instant)
 
@@ -31,6 +34,8 @@ data class ExecutionResponse(
     val diagnosisStartedAt: Instant?,
     val repairStartedAt: Instant?,
     val finishedAt: Instant?,
+    val failedAt: Instant?,
+    val failureReason: String?,
     val events: List<ExecutionEventResponse>,
 )
 
@@ -46,6 +51,8 @@ fun Execution.toResponse() = ExecutionResponse(
     diagnosisStartedAt = diagnosisStartedAt,
     repairStartedAt = repairStartedAt,
     finishedAt = finishedAt,
+    failedAt = failedAt,
+    failureReason = failureReason,
     events = events.map { ExecutionEventResponse(it.type, it.status, it.occurredAt) },
 )
 
@@ -77,4 +84,12 @@ class ExecutionController(private val service: ExecutionApplicationService) {
     @Operation(summary = "IN_EXECUTION -> FINISHED; publishes ExecutionFinished")
     fun finish(@PathVariable workOrderId: String): ExecutionResponse =
         service.finish(workOrderId).toResponse()
+
+    @PostMapping("/{workOrderId}/fail")
+    @Operation(summary = "QUEUED, IN_DIAGNOSIS or IN_EXECUTION -> FAILED; publishes ExecutionFailed")
+    fun fail(@PathVariable workOrderId: String, @RequestBody request: FailExecutionRequest): ExecutionResponse {
+        val reason = request.reason?.trim()
+        require(!reason.isNullOrEmpty()) { "reason is required" }
+        return service.fail(workOrderId, reason).toResponse()
+    }
 }

@@ -217,6 +217,73 @@ class ExecutionServiceIntegrationTest {
     }
 
     @Test
+    fun `fail from each non-final status publishes ExecutionFailed with the stored correlation id`() {
+        val steps = listOf<List<String>>(
+            emptyList(),
+            listOf("diagnosis/start"),
+            listOf("diagnosis/start", "repair/start"),
+        )
+        steps.forEachIndexed { index, path ->
+            val workOrderId = UUID.randomUUID().toString()
+            val correlationId = "corr-fail-$index"
+            publishStartExecution(workOrderId, correlationId = correlationId)
+            awaitExecution(workOrderId)
+            path.forEach { assertEquals(200, post("/api/executions/$workOrderId/$it").statusCode()) }
+            admin.purgeQueue(TEST_EVENTS, false)
+
+            val response = post("/api/executions/$workOrderId/fail", """{"reason":"engine seized $index"}""")
+
+            assertEquals(200, response.statusCode())
+            val failed = body(response)
+            assertEquals("FAILED", failed["status"].asText())
+            assertEquals("engine seized $index", failed["failureReason"].asText())
+            assertNotNull(failed["failedAt"].asText())
+            assertEquals("ExecutionFailed", failed["events"].last()["type"].asText())
+            assertEquals("FAILED", failed["events"].last()["status"].asText())
+            assertEquals("engine seized $index", body(get("/api/executions/$workOrderId", TestJwt.token()))["failureReason"].asText())
+
+            val event = receiveEvent()
+            assertEquals("ExecutionFailed", event["type"].asText())
+            assertEquals(workOrderId, event["sagaId"].asText())
+            assertEquals(workOrderId, event["payload"]["workOrderId"].asText())
+            assertEquals("engine seized $index", event["payload"]["reason"].asText())
+            assertEquals(correlationId, event["correlationId"].asText())
+            assertNotNull(event["messageId"])
+            assertNotNull(event["occurredAt"])
+            assertNull(rabbit.receive(TEST_EVENTS, 300))
+        }
+    }
+
+    @Test
+    fun `fail answers 409 from FINISHED and FAILED, 404 for unknown and 400 without a reason`() {
+        val finished = UUID.randomUUID().toString()
+        publishStartExecution(finished)
+        awaitExecution(finished)
+        listOf("diagnosis/start", "repair/start", "finish").forEach { post("/api/executions/$finished/$it") }
+        val failed = UUID.randomUUID().toString()
+        publishStartExecution(failed)
+        awaitExecution(failed)
+        assertEquals(200, post("/api/executions/$failed/fail", """{"reason":"first"}""").statusCode())
+        admin.purgeQueue(TEST_EVENTS, false)
+
+        assertEquals(409, post("/api/executions/$finished/fail", """{"reason":"late"}""").statusCode())
+        assertEquals(409, post("/api/executions/$failed/fail", """{"reason":"again"}""").statusCode())
+        assertEquals(404, post("/api/executions/${UUID.randomUUID()}/fail", """{"reason":"x"}""").statusCode())
+        assertEquals("FINISHED", body(get("/api/executions/$finished", TestJwt.token()))["status"].asText())
+        assertEquals("first", body(get("/api/executions/$failed", TestJwt.token()))["failureReason"].asText())
+
+        val open = UUID.randomUUID().toString()
+        publishStartExecution(open)
+        awaitExecution(open)
+        listOf("""{}""", """{"reason":""}""", """{"reason":"   "}""", """{"reason":null}""").forEach {
+            assertEquals(400, post("/api/executions/$open/fail", it).statusCode(), it)
+        }
+        assertEquals(400, post("/api/executions/$open/fail").statusCode())
+        assertEquals("QUEUED", body(get("/api/executions/$open", TestJwt.token()))["status"].asText())
+        assertNull(rabbit.receive(TEST_EVENTS, 300))
+    }
+
+    @Test
     fun `queue lists oldest first`() {
         val first = UUID.randomUUID().toString()
         val second = UUID.randomUUID().toString()
@@ -293,10 +360,12 @@ class ExecutionServiceIntegrationTest {
         return json.readTree(message.body)
     }
 
-    private fun post(path: String): HttpResponse<String> {
+    private fun post(path: String, jsonBody: String? = null): HttpResponse<String> {
+        val publisher = jsonBody?.let { HttpRequest.BodyPublishers.ofString(it) } ?: HttpRequest.BodyPublishers.noBody()
         val request = HttpRequest.newBuilder(URI.create("http://localhost:$port$path"))
-            .POST(HttpRequest.BodyPublishers.noBody())
+            .POST(publisher)
             .header("Authorization", "Bearer ${TestJwt.token()}")
+        jsonBody?.let { request.header("Content-Type", "application/json") }
         return http.send(request.build(), HttpResponse.BodyHandlers.ofString())
     }
 

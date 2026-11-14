@@ -2,7 +2,7 @@ package com.soat.tech.challenge.oficina.execution.infrastructure.messaging
 
 import com.fasterxml.jackson.databind.JsonNode
 
-/** Names of the messaging contract shared by the three services (see the platform spec). */
+/** Names of the messaging contract shared by the three services. */
 object Topology {
     const val EXCHANGE = "oficina"
     const val DEAD_LETTER_EXCHANGE = "oficina.dlx"
@@ -64,6 +64,8 @@ data class StartExecutionPayload(
 data class ExecutionStatusChangedPayload(val workOrderId: String, val status: String)
 
 data class ExecutionFinishedPayload(val workOrderId: String, val finishedAt: String)
+
+data class ExecutionFailedPayload(val workOrderId: String, val reason: String)
 
 /** The message cannot be understood (bad JSON, missing fields, unknown type): goes straight to the DLQ. */
 class InvalidMessageException(message: String, cause: Throwable? = null) : RuntimeException(message, cause)

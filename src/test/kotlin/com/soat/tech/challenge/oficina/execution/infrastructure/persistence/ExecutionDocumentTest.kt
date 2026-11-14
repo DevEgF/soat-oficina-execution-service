@@ -23,4 +23,15 @@ class ExecutionDocumentTest {
         assertEquals(execution.diagnosisStartedAt, restored.diagnosisStartedAt)
         assertEquals(execution.events, restored.events)
     }
+
+    @Test
+    fun `document round trip preserves the failure`() {
+        val execution = Fixtures.queued().apply { fail("engine seized", Fixtures.NOW.plusSeconds(8)) }
+
+        val restored = execution.toDocument().toDomain()
+
+        assertEquals(execution.status, restored.status)
+        assertEquals(execution.failedAt, restored.failedAt)
+        assertEquals("engine seized", restored.failureReason)
+    }
 }

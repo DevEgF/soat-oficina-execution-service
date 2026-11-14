@@ -69,6 +69,12 @@ class ExecutionApplicationService(
         return repository.save(execution).also(publisher::publishFinished)
     }
 
+    fun fail(workOrderId: String, reason: String): Execution {
+        val execution = find(workOrderId)
+        execution.fail(reason, clock.instant())
+        return repository.save(execution).also(publisher::publishFailed)
+    }
+
     private fun find(workOrderId: String): Execution =
         repository.findByWorkOrderId(workOrderId)
             ?: throw NotFoundException("Execution not found for work order $workOrderId")

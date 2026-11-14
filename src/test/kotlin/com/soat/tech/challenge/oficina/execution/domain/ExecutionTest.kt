@@ -4,6 +4,7 @@ import com.soat.tech.challenge.oficina.execution.domain.exception.InvalidStatusT
 import com.soat.tech.challenge.oficina.execution.domain.model.ExecutionStatus
 import com.soat.tech.challenge.oficina.execution.support.Fixtures
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
@@ -70,5 +71,43 @@ class ExecutionTest {
         assertThrows<InvalidStatusTransitionException> { execution.startDiagnosis(t3) }
         assertThrows<InvalidStatusTransitionException> { execution.startRepair(t3) }
         assertThrows<InvalidStatusTransitionException> { execution.finish(t3) }
+    }
+
+    @Test
+    fun `fail is allowed from QUEUED, IN_DIAGNOSIS and IN_EXECUTION`() {
+        val fromQueued = Fixtures.queued().apply { fail("no parts", t1) }
+        val fromDiagnosis = Fixtures.queued().apply { startDiagnosis(t1); fail("no parts", t2) }
+        val fromRepair = Fixtures.queued().apply { startDiagnosis(t1); startRepair(t2); fail("engine seized", t3) }
+
+        listOf(fromQueued, fromDiagnosis, fromRepair).forEach {
+            assertEquals(ExecutionStatus.FAILED, it.status)
+            assertNotNull(it.failedAt)
+            assertEquals("ExecutionFailed", it.events.last().type)
+            assertEquals(ExecutionStatus.FAILED, it.events.last().status)
+        }
+        assertEquals(t1, fromQueued.failedAt)
+        assertEquals("engine seized", fromRepair.failureReason)
+        assertNull(fromRepair.finishedAt)
+    }
+
+    @Test
+    fun `fail is refused from FINISHED and FAILED`() {
+        val finished = Fixtures.queued().apply { startDiagnosis(t1); startRepair(t2); finish(t3) }
+        val failed = Fixtures.queued().apply { fail("first", t1) }
+
+        val error = assertThrows<InvalidStatusTransitionException> { finished.fail("late", t3) }
+        assertEquals("Cannot fail when the execution is FINISHED", error.message)
+        assertThrows<InvalidStatusTransitionException> { failed.fail("again", t3) }
+        assertEquals("first", failed.failureReason)
+        assertNull(finished.failedAt)
+    }
+
+    @Test
+    fun `failed execution accepts no further action`() {
+        val execution = Fixtures.queued().apply { fail("x", t1) }
+
+        assertThrows<InvalidStatusTransitionException> { execution.startDiagnosis(t2) }
+        assertThrows<InvalidStatusTransitionException> { execution.startRepair(t2) }
+        assertThrows<InvalidStatusTransitionException> { execution.finish(t2) }
     }
 }
